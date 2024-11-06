@@ -64,5 +64,5 @@ int main(int argc, char *argv[])
         c.print_hex();
     }
 
-
+    cout << endl;
 }
