@@ -50,16 +50,39 @@ void param_setup()
     cudaFree(zero_dev);
 }
 
+#define BLK_SIZ (1 << 2)
+
 __global__ void matmul(cuda::alt_bn128_Fp *A, cuda::alt_bn128_Fp *B, cuda::alt_bn128_Fp *D, const int n)
 {
-    for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) {
-        for (int k = 0; k < n; k++) D[i * n + j] = D[i * n + j] + (A[i * n + k] * B[k * n + j]);
-        D[i * n + j].mont_unrepr();
+    __shared__ cuda::alt_bn128_Fp shareA[BLK_SIZ][BLK_SIZ];
+    __shared__ cuda::alt_bn128_Fp shareB[BLK_SIZ][BLK_SIZ];
+    __syncthreads();
+
+    cuda::alt_bn128_Fp t = cuda::alt_bn128::zero;
+    for (int i = 0; i < n / BLK_SIZ; i++) {
+        shareA[threadIdx.x][threadIdx.y] = A[(blockIdx.x * BLK_SIZ + threadIdx.x) * n + (i * BLK_SIZ + threadIdx.y)];
+        shareB[threadIdx.x][threadIdx.y] = B[(i * BLK_SIZ + threadIdx.x) * n + (blockIdx.y * BLK_SIZ + threadIdx.y)];
+        __syncthreads();
+        for (int j = 0; j < BLK_SIZ; j++) t = t + (shareA[threadIdx.x][j] * shareB[j][threadIdx.y]);
+        __syncthreads();
     }
+
+    t.mont_unrepr();
+    D[(blockIdx.x * BLK_SIZ + threadIdx.x) * n + (blockIdx.y * BLK_SIZ + threadIdx.y)] = t;
 }
+
+// __global__ void matmul(cuda::alt_bn128_Fp *A, cuda::alt_bn128_Fp *B, cuda::alt_bn128_Fp *D, const int n)
+// {
+//     for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) {
+//         for (int k = 0; k < n; k++) D[i * n + j] = D[i * n + j] + (A[i * n + k] * B[k * n + j]);
+//         D[i * n + j].mont_unrepr();
+//     }
+// }
 
 int main(int argc, char *argv[])
 {
+    param_setup();
+
     for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) {
         A[i][j] = rand_alt_bn128_Fp(), B[i][j] = rand_alt_bn128_Fp(), C[i][j] = alt_bn128::zero, D[i][j] = alt_bn128::zero;
         A[i][j].mont_repr(), B[i][j].mont_repr();
@@ -78,7 +101,10 @@ int main(int argc, char *argv[])
     cudaMemcpy((void *)dev_B, &B[0][0], n * n * sizeof(alt_bn128_Fp), cudaMemcpyHostToDevice);
     cudaMemcpy((void *)dev_D, &D[0][0], n * n * sizeof(alt_bn128_Fp), cudaMemcpyHostToDevice);
 
-    matmul<<<1, 1>>>(dev_A, dev_B, dev_D, n);
+    dim3 blk(BLK_SIZ, BLK_SIZ);
+    dim3 grid(n / BLK_SIZ, n / BLK_SIZ);
+    matmul<<<grid, blk>>>(dev_A, dev_B, dev_D, n);
+    // matmul<<<1, 1>>>(dev_A, dev_B, dev_D, n);
 
     cudaMemcpy(&D[0][0], (void *)dev_D, n * n * sizeof(alt_bn128_Fp), cudaMemcpyDeviceToHost);
 

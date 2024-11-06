@@ -20,7 +20,7 @@ namespace cuda {
     template <size_t t>
     class Bigint {
     public:
-        Int data[t] = {0};
+        Int data[t];
 
         Bigint() = default;
         __device__ Bigint(const Int sml);
