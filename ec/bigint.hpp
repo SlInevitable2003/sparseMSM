@@ -24,6 +24,7 @@ public:
 };
 
 bool larger_or_eq(Int* a, Int* b, size_t t);
+bool eq(Int* a, Int *b, size_t t);
 
 Bit big_add(Int* res, Int* a, Int* b, size_t t);
 Bit big_sub(Int* res, Int* a, Int* b, size_t t);

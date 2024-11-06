@@ -82,6 +82,18 @@ bool larger_or_eq(Int* a, Int* b, size_t t)
     return (highest_larger_bit > highest_less_bit) || (highest_less_bit == -1);
 }
 
+bool eq(Int* a, Int *b, size_t t)
+{
+    int highest_less_bit = -1;
+    int highest_larger_bit = -1;
+    for (int i = 0; i < t; i++) {
+        bool flag_less = (a[i] < b[i]), flag_larger = (a[i] > b[i]);
+        highest_less_bit = flag_less * i + (1 - flag_less) * highest_less_bit;
+        highest_larger_bit = flag_larger * i + (1 - flag_larger) * highest_larger_bit;
+    }
+    return (highest_larger_bit == -1) && (highest_less_bit == -1);
+}
+
 Bit big_add(Int* res, Int* a, Int* b, size_t t)
 {
     Bit carry = 0;

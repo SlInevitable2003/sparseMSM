@@ -65,4 +65,11 @@ int main(int argc, char *argv[])
     }
 
     cout << endl;
+
+    auto g = alt_bn128::gentor; g.mont_repr(); 
+    auto h = g + (g + g.doubling()); h.mont_unrepr(); h.print_hex();
+    g.mont_unrepr(); auto k = g.native_scale({Bigint<4>{4}}); k.print_hex();
+    h.mont_repr(); k.mont_repr();
+    (h + k).print_hex();
+    h.doubling().print_hex();
 }
