@@ -66,7 +66,7 @@ const int zero_bound = 5;
 #define LOG2_BLK_SIZ 2
 #define BLK_SIZ (1 << 2)
 
-__global__ void sparse_msm(cuda::alt_bn128_Fp *coeff, cuda::alt_bn128_EC *point, const int log2n)
+__global__ void native_msm_step1(cuda::alt_bn128_Fp *coeff, cuda::alt_bn128_EC *point)
 {
     int idx = blockIdx.x * BLK_SIZ + threadIdx.x;
     __shared__ cuda::alt_bn128_EC share[BLK_SIZ];
@@ -80,21 +80,55 @@ __global__ void sparse_msm(cuda::alt_bn128_Fp *coeff, cuda::alt_bn128_EC *point,
         __syncthreads();
     }
     point[idx] = share[threadIdx.x];
+}
+__global__ void native_msm_step2(cuda::alt_bn128_Fp *coeff, cuda::alt_bn128_EC *point, const int log2n)
+{
+    __shared__ cuda::alt_bn128_EC share[BLK_SIZ];
+    share[threadIdx.x] = point[threadIdx.x * BLK_SIZ];
+    __syncthreads();
 
-    for (int depth = LOG2_BLK_SIZ; depth < log2n; depth++) {
-        cuda::alt_bn128_EC t = point[idx] + point[idx ^ (1 << depth)];
+    for (int depth = 0; depth < log2n - LOG2_BLK_SIZ; depth++) {
+        cuda::alt_bn128_EC t = share[threadIdx.x] + share[threadIdx.x ^ (1 << depth)];
         __syncthreads();
-        point[idx] = t;
+        share[threadIdx.x] = t;
         __syncthreads();
     }
+    point[0] = share[threadIdx.x];
+}
+void native_msm(cuda::alt_bn128_Fp *coeff_dev, cuda::alt_bn128_EC *point_dev, const int log2n)
+{
+    native_msm_step1<<<n / BLK_SIZ, BLK_SIZ>>>(coeff_dev, point_dev);
+    cudaDeviceSynchronize();
+    native_msm_step2<<<1, BLK_SIZ>>>(coeff_dev, point_dev, 4);
 }
 
 // __global__ void sparse_msm(cuda::alt_bn128_Fp *coeff, cuda::alt_bn128_EC *point, const int n)
 // {
-//     cuda::alt_bn128_EC buf[5][16];
-//     for (int j = 0; j < 16; j++) buf[0][j] = point[j].native_scale(coeff[j]);
-//     for (int i = 0; i < 4; i++) for (int j = 0; j < 16; j++) buf[i + 1][j] = buf[i][j] + buf[i][j ^ (1 << i)];
-//     point[0] = buf[4][0];
+//     int idx = blockIdx.x * BLK_SIZ + threadIdx.x;
+//     __shared__ cuda::alt_bn128_EC buf[16];
+//     // for (int j = 0; j < 16; j++) buf[0][j] = point[j].native_scale(coeff[j]);
+//     point[idx] = point[idx].native_scale(coeff[idx]);
+//     __syncthreads();
+
+//     // if (threadIdx.x == 0) {
+//     //     for (int i = 0; i < 4; i++) for (int j = 0; j < 16; j++) buf[i + 1][j] = buf[i][j] + buf[i][j ^ (1 << i)];
+//     //     point[0] = buf[4][0];
+//     // }
+//     // for (int i = 0; i < 2; i++) {
+//     //     auto t = buf[threadIdx.x] + buf[threadIdx.x ^ (1 << i)];
+//     //     __syncthreads();
+//     //     buf[threadIdx.x] = t;
+//     //     __syncthreads();
+//     // }
+//     // point[idx] = buf[threadIdx.x];
+//     // __syncthreads();
+
+//     for (int i = 0; i < 4; i++) {
+//         auto t = point[idx] + point[idx ^ (1 << i)];
+//         __syncthreads();
+//         point[idx] = t;
+//         __syncthreads();
+//     }
 // }
 
 int main(int argc, char *argv[])
@@ -163,9 +197,7 @@ int main(int argc, char *argv[])
     cudaMemcpy((void *)coeff_dev, &coeff[0], n * sizeof(alt_bn128_Fp), cudaMemcpyHostToDevice);
     cudaMemcpy((void *)point_dev, &point[0], n * sizeof(alt_bn128_EC), cudaMemcpyHostToDevice);
 
-    sparse_msm<<<n / BLK_SIZ, BLK_SIZ>>>(coeff_dev, point_dev, 4);
-    // sparse_msm<<<1, 1>>>(coeff_dev, point_dev, n);
-    cudaDeviceSynchronize();
+    native_msm(coeff_dev, point_dev, 4);
 
     cudaMemcpy((void *)&gpu_sum, (void *)point_dev, sizeof(cuda::alt_bn128_EC), cudaMemcpyDeviceToHost);
     cudaDeviceSynchronize();
