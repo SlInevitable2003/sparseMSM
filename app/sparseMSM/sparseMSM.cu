@@ -11,18 +11,8 @@ using namespace std;
 
 #define SEED 0
 
-Bit randBit() { return Bit(rand() & 1); }
-Int randInt() { Int ret = 0; for (int i = 0; i < 3; i++) ret = (ret << 31) | rand(); return ret; }
-template<size_t t> Bigint<t> randBigint() { Bigint<t> ret; for (int i = 0; i < t; i++) ret.data[i] = randInt(); return ret; }
-alt_bn128_Fp rand_alt_bn128_Fp() 
-{
-    Bigint<4> ret = randBigint<4>();
-    while (larger_or_eq(ret.data, alt_bn128::pri.data, 4)) ret = randBigint<4>();
-    return {ret};
-}
-alt_bn128_EC rand_alt_bn128_EC() { return alt_bn128::gentor.native_scale(rand_alt_bn128_Fp(), true); }
-
-const int n = 1 << 4;
+const int log2n = 10;
+const int n = 1 << log2n;
 alt_bn128_Fp coeff[n];
 alt_bn128_EC point[n];
 
@@ -63,8 +53,8 @@ void param_setup()
 
 const int zero_bound = 5;
 
-#define LOG2_BLK_SIZ 2
-#define BLK_SIZ (1 << 2)
+#define LOG2_BLK_SIZ 5
+#define BLK_SIZ (1 << 5)
 
 __global__ void native_msm_step1(cuda::alt_bn128_Fp *coeff, cuda::alt_bn128_EC *point)
 {
@@ -99,37 +89,10 @@ void native_msm(cuda::alt_bn128_Fp *coeff_dev, cuda::alt_bn128_EC *point_dev, co
 {
     native_msm_step1<<<n / BLK_SIZ, BLK_SIZ>>>(coeff_dev, point_dev);
     cudaDeviceSynchronize();
-    native_msm_step2<<<1, BLK_SIZ>>>(coeff_dev, point_dev, 4);
+    native_msm_step2<<<1, BLK_SIZ>>>(coeff_dev, point_dev, log2n);
 }
 
-// __global__ void sparse_msm(cuda::alt_bn128_Fp *coeff, cuda::alt_bn128_EC *point, const int n)
-// {
-//     int idx = blockIdx.x * BLK_SIZ + threadIdx.x;
-//     __shared__ cuda::alt_bn128_EC buf[16];
-//     // for (int j = 0; j < 16; j++) buf[0][j] = point[j].native_scale(coeff[j]);
-//     point[idx] = point[idx].native_scale(coeff[idx]);
-//     __syncthreads();
-
-//     // if (threadIdx.x == 0) {
-//     //     for (int i = 0; i < 4; i++) for (int j = 0; j < 16; j++) buf[i + 1][j] = buf[i][j] + buf[i][j ^ (1 << i)];
-//     //     point[0] = buf[4][0];
-//     // }
-//     // for (int i = 0; i < 2; i++) {
-//     //     auto t = buf[threadIdx.x] + buf[threadIdx.x ^ (1 << i)];
-//     //     __syncthreads();
-//     //     buf[threadIdx.x] = t;
-//     //     __syncthreads();
-//     // }
-//     // point[idx] = buf[threadIdx.x];
-//     // __syncthreads();
-
-//     for (int i = 0; i < 4; i++) {
-//         auto t = point[idx] + point[idx ^ (1 << i)];
-//         __syncthreads();
-//         point[idx] = t;
-//         __syncthreads();
-//     }
-// }
+extern void instance_generating(int *randomness, alt_bn128_Fp *coeff, alt_bn128_EC *point, int n);
 
 int main(int argc, char *argv[])
 {
@@ -149,14 +112,7 @@ int main(int argc, char *argv[])
     cout << "randomness sampling done." << endl;
     cout << "MSM instance generating..." << endl;
 
-    for (int i = 0; i < n; i++) {
-        switch (randomness[i]) {
-            case 0: { coeff[i] = alt_bn128::zero; } break;
-            case 1: { coeff[i] = alt_bn128::one; } break;
-            case 2: { coeff[i] = rand_alt_bn128_Fp(); }
-        }
-        point[i] = rand_alt_bn128_EC();
-    }
+    instance_generating(randomness, coeff, point, n);
 
     cout << "MSM instance generating done." << endl;
     cout << "native MSM applying..." << endl;
@@ -179,13 +135,6 @@ int main(int argc, char *argv[])
     sum.mont_unrepr();
     sum.print_hex();
 
-    // alt_bn128_EC buf[5][16];
-    // for (int j = 0; j < 16; j++) buf[0][j] = point[j].native_scale(coeff[j]);
-    // for (int i = 0; i < 4; i++) for (int j = 0; j < 16; j++) buf[i + 1][j] = buf[i][j] + buf[i][j ^ (1 << i)];
-    // auto sum2 = buf[4][0];
-    // sum2.mont_unrepr();
-    // sum2.print_hex();
-
     cout << "native gpu-MSM applying ..." << endl;
 
     alt_bn128_EC gpu_sum;
@@ -197,7 +146,7 @@ int main(int argc, char *argv[])
     cudaMemcpy((void *)coeff_dev, &coeff[0], n * sizeof(alt_bn128_Fp), cudaMemcpyHostToDevice);
     cudaMemcpy((void *)point_dev, &point[0], n * sizeof(alt_bn128_EC), cudaMemcpyHostToDevice);
 
-    native_msm(coeff_dev, point_dev, 4);
+    native_msm(coeff_dev, point_dev, log2n);
 
     cudaMemcpy((void *)&gpu_sum, (void *)point_dev, sizeof(cuda::alt_bn128_EC), cudaMemcpyDeviceToHost);
     cudaDeviceSynchronize();
